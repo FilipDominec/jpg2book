@@ -1,0 +1,554 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#{{{
+"""
+This program takes a directory of jpg images and allows you to modify them to make a book.
+
+Copyright 2009 Filip Dominec <filip.dominec at gmail.com>
+
+== License ==
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+"""
+#}}}
+# TODO JD: 2) individual rename             3) click-crop
+# FIXME 1) fit-to-window
+#    0) GUI LABELS! 
+#     3) sidebar with tree view page/region/region_props allowing changing order (page thumbs would be nice: grab from gqview)
+#    4) deleting images
+
+import pygtk, gtk, os, pango, sys, subprocess, Image, traceback, commands
+# import FDSettingsPickler TODO
+pygtk.require('2.0')
+
+class Main:
+    def __init__(self):
+        self.builder = gtk.Builder()    # use self.builder: gtk.Builder to generate the GUI
+        self.builder.add_from_file(sys.path[0] + "/" + "jpg2book.xml") 
+        self.builder.connect_signals(self)       
+
+        ## Manual signal connect (to pass custom parameters)
+        self.w('btnPrevToStart').connect("clicked", self.change_image, -1000000)
+        self.w('btnPrev10').connect("clicked", self.change_image, -10)
+        self.w('btnPrev1').connect("clicked", self.change_image, -1)
+        self.w('btnNext1').connect("clicked", self.change_image, 1)
+        self.w('btnNext10').connect("clicked", self.change_image, 10)
+        self.w('btnNextToEnd').connect("clicked", self.change_image, 1000000)
+
+        ## Unpickle recent settings if available (todo)
+        """
+        self.SettingsPickler = FDSettingsPickler.FDSettingsPickler(
+                Builder = self.builder,
+                NumPropNames = ["a", "b"],
+                TextPropNames = ["c", "d", \
+                        "e"])
+        self.SettingsPickler.LoadSettings()
+        """
+
+        self.pixbuf=None
+        self.ShownImg=0
+        self.imagecount=0
+        self.imagelist=[]
+        self.LeftCrop=[]     # cropping parameters for each image
+        self.RightCrop=[]
+        self.TopCrop=[]
+        self.BottomCrop=[]
+
+        self.origX = self.origY = 0         # for mouse dragging
+        self.OldLeftCrop      =    0
+        self.OldRightCrop     =    0
+        self.OldTopCrop       =    0
+        self.OldBottomCrop    =    0
+
+        #self.load_img_directory(self, self.w('drawingarea1'))
+
+        self.w('Window1').maximize()
+
+    def w(self, widgetname):
+        #print 'Widgetname ' + widgetname + ": ", type(self.builder.get_object(widgetname))
+        return self.builder.get_object(widgetname)    # shortcut to access widgets
+
+### ------------------------------ Important functions
+    def load_img_directory(self, widget, data=None):        #{{{
+        wd = self.w('dlgDirectory').get_filename()+"/"
+        if (wd == None): print "wd == None"; return
+
+        # open all images in folder and set the crop rectangle to match their dimensions
+        print "wd", wd
+        FileFilter =  self.w('edtFilter').get_text()
+        files = commands.getoutput("cd %s; ls %s 2> /dev/null" % (wd, FileFilter)).split('\n')
+
+        print "files", files
+        for file in files:
+            if (file == ''): continue
+            self.imagelist.append(wd+file)
+            (width, height) = Image.open(wd+file).size 
+            self.RightCrop.append(width)
+            self.BottomCrop.append(height)
+            self.LeftCrop.append(0)
+            self.TopCrop.append(0)
+
+        #runBash("ls -1 " + wd +"/*.[jJ][pP][gG] " + wd + "/*.[pP][nN][gG] " + wd + "/*.[jJ][pP][eE][gG] >  " +
+                #"/tmp/guitesseractfilelist.tmp 2> /dev/null")
+        #dir_listing_file = open('/tmp/guitesseractfilelist.tmp')
+        #self.imagelist=[]
+        #self.LeftCrop=[]; self.RightCrop=[]; self.TopCrop=[]; self.BottomCrop=[]  # cropping parameters for each image
+#
+#
+        #filename = dir_listing_file.readline()
+        #filename = filename.strip()
+        #while filename != "":     
+            #print filename
+            #self.imagelist.append(filename)
+            # negative values will be replaced with image size: FIXME
+            #try:
+                #f = open(filename, 'r')
+                #f.close()
+            #except IOError:
+                #self.errorDialog('Cannot open ' + filename, fileChooser)
+                #return False
+            #self.scanfilepixbuf = gtk.gdk.pixbuf_new_from_file(filename)     # FIXME; too slow!
+            #self.RightCrop.append(self.scanfilepixbuf.get_width())
+            #self.BottomCrop.append(self.scanfilepixbuf.get_height())
+            #self.LeftCrop.append(0)
+            #self.TopCrop.append(0)
+            #print "self.TopCrop", self.TopCrop
+            #filename = dir_listing_file.readline()
+            #filename = filename.strip()
+
+        #runBash("rm /tmp/guitesseractfilelist.tmp")
+        if len(self.imagelist) > 0:
+            self.ShownImg=0
+            self.ShowImage()
+        #self.w('lblLeft').set_text(0),
+        #self.w('lblTop').set_text(0),
+        #self.w('lblRight').set_text(10000),
+        #self.w('lblBottom').set_text(10000),
+        #}}}
+
+    def process_images(self, a=None, b=None):#{{{
+        wd = self.w('dlgDirectory').get_filename()
+        lang="eng" # FIXME
+
+        OCRCommand = "cuneiform"        # FIXME let the user choose
+        if (OCRCommand.rsplit('/')[-1] == "cuneiform") and (self.w('chkTextOutput').get_active() ):
+            dialog = gtk.FileChooserDialog("Select the file to save the recognized document...",
+                None,
+                gtk.FILE_CHOOSER_ACTION_SAVE,
+                (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
+                gtk.STOCK_SAVE, gtk.RESPONSE_OK))
+            dialog.set_default_response(gtk.RESPONSE_OK)
+            filter = gtk.FileFilter()
+            filter.set_name("All HTML pages")     # TODO enable plain text output, too
+            filter.add_pattern("*.htm")
+            filter.add_pattern("*.html")
+            dialog.add_filter(filter)
+            response = dialog.run()
+            if response == gtk.RESPONSE_OK:
+                print dialog.get_filename(), 'selected'
+                OutHtmlFilename = dialog.get_filename()
+                if (OutHtmlFilename.rsplit != "htm" or OutHtmlFilename.rsplit != "html"):
+                    OutHtmlFilename += ".html"
+            elif response == gtk.RESPONSE_CANCEL:
+                print 'Closed, no files selected'
+                self.w('chkTextOutput').set_active(False)
+            dialog.destroy()
+
+
+
+
+        for CurImg in range(0,len(self.imagelist)):
+
+            self.w('btnProcess').set_label("Progress: %.1f%%" % ((100.0*CurImg)/len(self.imagelist)))
+            while (gtk.events_pending()): gtk.main_iteration();
+
+            infile    = self.imagelist[CurImg]            # input filename with extension
+            outfile    = self.output_filename(infile, CurImg)        # output filename without extension
+
+            print 
+            ConvertOption1 = ""
+            if self.w('chkCrop').get_active(): 
+                ConvertOption1 += " -crop "+`(self.RightCrop[CurImg]-self.LeftCrop[CurImg])`+"x"+\
+                        `(self.BottomCrop[CurImg]-self.TopCrop[CurImg])`+"+"+`self.LeftCrop[CurImg]`+\
+                        "+"+`self.TopCrop[CurImg]`+" "
+            if (self.w('chkGreyScale').get_active()): 
+                ConvertOption1 += " -colorspace Gray " 
+            if (self.w('chkRotate').get_active()): 
+                ConvertOption1 += " -rotate "+self.w('edtRotAngle').get_text()
+            if (self.w('chkNormalize').get_active() and not self.w('chkStrongNorm').get_active()): 
+                    ConvertOption1 += " -normalize" 
+            if (self.w('chkStrongNorm').get_active()): 
+                    ConvertOption1 += " -contrast-stretch 0x20%" 
+            TmpImg1 = commands.getoutput("mktemp")+".png"
+            print("convert '%s' %s '%s'" % (infile, ConvertOption1, TmpImg1))
+            print ">>> ", commands.getoutput("convert '%s' %s '%s'" % (infile, ConvertOption1, TmpImg1))
+
+
+            WbOption = ""
+            if (self.w('chkRemoveBackground').get_active()):
+                WbOption += "-e both -f 12 -o 5 -s 1 -t 30"
+
+            if (WbOption != ""):
+                TmpImg2 = commands.getoutput("mktemp")+".png"
+                WbCommand = "nice ~/bin/whiteboard"                 # FIXME: make independent of wb location
+                WbOption = "-e both -f 12 -o 5 -s 1 -t 30"
+                print ("%s %s '%s' '%s'" % (WbCommand, WbOption, TmpImg1, TmpImg2))
+                print ">>> ", commands.getoutput("%s %s '%s' '%s'" % (WbCommand, WbOption, TmpImg1, TmpImg2))
+            else:
+                TmpImg2 = TmpImg1
+
+
+            ConvertOption2 = ""
+            if (self.w('chkThreshold').get_active()): 
+                ConvertOption2 += " -threshold "+self.w('edtThreshold').get_text()+"%"
+            if (ConvertOption2 != ""):
+                #TmpImg3 = commands.getoutput("mktemp")+".png"
+                print ("convert '%s' %s '%s'" % (TmpImg2, ConvertOption2, outfile+'.png'))
+                print ">>> ", commands.getoutput("convert '%s' %s '%s'" % (TmpImg2, ConvertOption2, outfile+".png"))
+            else:
+                print ">>> ", commands.getoutput("cp '%s' '%s'" % (TmpImg2, outfile+'.png'))
+
+            OCRCommand = "cuneiform"        # FIXME let the user choose
+            OCROption = ""
+            if (self.w('chkTextOutput').get_active() ):
+                #print   "convert '%s' %s '%s.png'" % (infile, ConvertOption1, outfile) .. makes no sense
+                #runBash("convert '"+infile+"' "+crop_option+" "+rotate_option+" "+normalize_option+" '"+ outfile + ".png'")
+                if (OCRCommand.rsplit('/')[-1] == "cuneiform"):
+                    OCROption += " -l cze -f html"            # FIXME l10n !!
+                    print("%s %s -o %s %s" % (OCRCommand,  OCROption, outfile+".html", outfile+".png"))
+                    HtmlOutput = outfile+".html"
+                    # FIXME proper quoting of filenames (or editing directly here in python)
+                    print ">>> ", commands.getoutput("%s %s -o %s %s" % (OCRCommand,  OCROption, HtmlOutput, outfile+".png"))
+                    print ">>> ", commands.getoutput("sed -i %s -e 's/<body>/\\n<body>\\n/'" % HtmlOutput)
+                    print ">>> ", commands.getoutput("sed -i %s -e 's/<\/p>\s*<p/<\/p>\\n<p/g'" % HtmlOutput) 
+                    print ">>> ", commands.getoutput("sed -i %s -e 's/<\/body>/\\n<\/body>\\n/'" % HtmlOutput)
+                    print ">>> ", commands.getoutput("cat %s >> all.html" % HtmlOutput)
+                    print ">>> ", commands.getoutput("echo '<!-- (((EndPage))) -->' >> all.html")
+                    print ">>> ", commands.getoutput("echo '<!-- End of page: %s -->' >> all.html" % outfile)
+                    print ">>> ", commands.getoutput("echo '<!-- (((StartPage))) -->' >> all.html")
+                elif (OCRCommand.rsplit('/')[-1] == "tesseract"):
+                    OCROption += " -lang cze -f html"
+                    print("%s %s %s %s" % (OCRCommand, outfile+".png", outfile, OCROption))
+                    print ">>> ", commands.getoutput("%s %s %s %s" % (OCRCommand, outfile+".png", outfile, OCROption))
+                else:
+                    assert False, "Unsupported OCR command!"
+
+            if self.w('chkPageNumberImprint').get_active(): 
+                commands.getoutput("convert -pointsize 14  label:' %s ' tmp.png" % self.output_filename(infile, CurImg, NoText=True))
+                commands.getoutput("mogrify -gravity %s -draw 'image over 0,0 0,0 tmp.png' '%s'" % 
+                                (self.w('edtGravity').get_text(), outfile+".png"))
+                commands.getoutput("rm tmp.png")
+            #print "Converting " + infile
+            if self.w('chkJPEGOutput').get_active():  
+                print("convert '%s' -quality 80 '%s'" % (outfile+".png", outfile+".jpg"))
+                print ">>> ", commands.getoutput("nice convert '%s' -quality 80 '%s'" % \
+                        (outfile+".png", outfile+".jpg"))
+
+            ## Remove temporary files
+            for TmpImg in (TmpImg1, TmpImg2):
+                if TmpImg != None: 
+                    commands.getoutput("rm %s" % TmpImg)
+                    TmpImg = None
+            if (not self.w('chkTIFFOutput').get_active()):  
+                    print ">>> ", commands.getoutput("rm %s" % outfile+".png")
+
+        ## Post-processing of the HTML file
+        if (OCRCommand.rsplit('/')[-1] == "cuneiform") and (self.w('chkTextOutput').get_active() ):
+            print ">>> ", commands.getoutput("echo '</body></html>' >> all.html ")
+            #print ">>> ", commands.getoutput("cp all.html all.preprocessed.html")
+            print ">>> ", commands.getoutput("sed -i all.html -e '/<\/body>/,/(((EndPage)))/ d'")
+            print ">>> ", commands.getoutput("sed -i all.html -e '/(((StartPage)))/,/<body>/ d'")
+            print ">>> ", commands.getoutput("sed -i all.html -e 's/-\s*\\n//g' -e 's/<.span>\s*$//g'")
+            print ">>> ", commands.getoutput("sed -i all.html -e :a -e '/-\s*$/N; s/-\s*\\n//; ta'")
+            print ">>> ", commands.getoutput("sed -i all.html -e 's/<p><\/p>//'")
+            print ">>> ", commands.getoutput("sed -i all.html -e 's/\\n<\/p>/<\/p>/'")
+            print ">>> ", commands.getoutput("sed -i all.html -e 's/\\n<\/p>/<\/p>/'")
+            print ">>> ", commands.getoutput("sed -i all.html -e 's/â€”/-/'")
+            print ">>> ", commands.getoutput("mv all.html '%s'" % OutHtmlFilename)
+        self.w('btnProcess').set_label("Process images again!")
+    #}}}
+    def change_image(self, widget, step):                # skip to next or previous image,  #{{{
+        self.ShownImg = self.ShownImg+step
+        if (self.ShownImg >= len(self.imagelist)): self.ShownImg = len(self.imagelist)-1
+        if (self.ShownImg < 0): self.ShownImg = 0
+        self.ShowImage()
+        #}}}
+    def ShowImage(self):          # load the selected image from disk, show its properties #{{{
+        infile=self.imagelist[self.ShownImg]    # with extension
+        try:
+            f = open(infile, 'r')
+            f.close()
+        except IOError:
+            self.errorDialog('Cannot open ' + infile, fileChooser)
+            return False
+
+        (filepath, infilewopath) = infile.rsplit('/', 1)
+        (outfilepath, outfilewopath) = self.output_filename(infile, self.ShownImg).rsplit('/', 1)
+        self.w('lblImgName').set_markup("<b>in:</b> " + infilewopath + ", <b>out:</b> " + outfilewopath +".jpg")
+        
+        self.origpixbuf = gtk.gdk.pixbuf_new_from_file(infile)         # original image
+        self.pixbuf = self.origpixbuf.scale_simple(            
+                self.w('scrolledWindow').allocation.width - 6,
+                self.w('scrolledWindow').allocation.height - 6,
+                gtk.gdk.INTERP_TILES)                 # resized image (to fit window)
+
+        if self.RightCrop[self.ShownImg] < 0 or self.RightCrop[self.ShownImg] > self.origpixbuf.get_width():
+            self.RightCrop[self.ShownImg] = self.origpixbuf.get_width()-1
+        if self.BottomCrop[self.ShownImg] < 0 or self.BottomCrop[self.ShownImg] > self.origpixbuf.get_height():
+            self.BottomCrop[self.ShownImg] = self.origpixbuf.get_height()-1
+        
+            self.w('lblLeft').set_text(`self.LeftCrop[self.ShownImg]`)
+            self.w('lblRight').set_text(`self.RightCrop[self.ShownImg]`)
+            self.w('lblTop').set_text(`self.TopCrop[self.ShownImg]`)
+            self.w('lblBottom').set_text(`self.BottomCrop[self.ShownImg]`)
+
+            self.w('drawingarea1').set_size_request(self.pixbuf.get_width(), self.pixbuf.get_height())
+        self.w('drawingarea1').window.draw_pixbuf(self.w('drawingarea1').get_style().fg_gc[gtk.STATE_NORMAL], self.pixbuf, 0, 0, 0, 0)
+        #if self.w('lblRight').get_text() > self.origpixbuf.get_width(): self.w('lblRight').set_value(self.origpixbuf.get_width())
+        #if self.w('lblBottom').get_text() > self.origpixbuf.get_height(): self.w('lblBottom').set_value(self.origpixbuf.get_height())
+        self.redrawArea(None, None)
+        return True
+    #}}}
+
+### ------------------------------ Auxiliary functions
+    def redrawArea(self, event, dummy=None):#{{{        # make the drawing area refresh and draw the rectangle
+        gc = self.w('drawingarea1').window.new_gc() # get the graphic context
+
+        #GdkColormap.alloc_color
+        gc.foreground = self.w('drawingarea1').get_colormap().alloc_color(0xaaaa, 0x0000, 0x0000)
+        if self.pixbuf: self.w('drawingarea1').window.draw_pixbuf(gc, self.pixbuf, 0, 0, 0, 0)
+        if (len(self.LeftCrop) > 0) and self.w('chkCrop').get_active(): 
+            self.w('drawingarea1').window.draw_rectangle(gc, False, 
+                int(self.LeftCrop[self.ShownImg] * self.pixbuf.get_width() / self.origpixbuf.get_width()),
+                int(self.TopCrop[self.ShownImg] * self.pixbuf.get_height() / self.origpixbuf.get_height()),
+                int((self.RightCrop[self.ShownImg] - self.LeftCrop[self.ShownImg]) * \
+                        self.pixbuf.get_width() / self.origpixbuf.get_width()),
+                int((self.BottomCrop[self.ShownImg] - self.TopCrop[self.ShownImg]) * \
+                        self.pixbuf.get_height() / self.origpixbuf.get_height()))
+        #}}}
+    def on_btnAutoCropClose_clicked(self, widget):#{{{
+        self.w("wndAutoCropOptions").hide()
+#}}}
+    def on_btnRemove_clicked(self, widget):#{{{
+        dialog = gtk.Dialog("Remove this image from book?", None, 0,
+                ( gtk.STOCK_NO, gtk.RESPONSE_NO,
+                gtk.STOCK_YES, gtk.RESPONSE_YES))
+        response = dialog.run()
+        dialog.destroy()
+        commands.getoutput('mkdir Trash')
+        commands.getoutput('mv ' + self.imagelist[self.ShownImg] + ' Trash/')
+        while gtk.events_pending(): gtk.main_iteration(False)
+        if (response == gtk.RESPONSE_YES and (len(self.imagelist) != 0)):
+            del self.RightCrop[self.ShownImg]
+            del self.BottomCrop[self.ShownImg]
+            del self.LeftCrop[self.ShownImg]
+            del self.TopCrop[self.ShownImg]
+            del self.imagelist[self.ShownImg]
+        if (self.ShownImg >= len(self.imagelist)):
+            self.ShownImg -= 1
+        self.ShowImage()
+            #}}}
+
+    def on_btnAutoCropOptShow_clicked(self, widget):#{{{
+        self.w("wndAutoCropOptions").show_all()
+#}}}
+    def on_btnDetermineCrop_clicked(self, widget):#{{{
+        if (widget is self.w('btnDetermineCrop')): 
+            ImagesToProcess = range(0,len(self.imagelist))
+        else:
+            ImagesToProcess = [self.ShownImg]
+        for CurImg in ImagesToProcess:
+                print CurImg+1, "of", len(self.imagelist)
+                #CurImg = self.ShownImg
+
+                #TODO
+                CropRegionCommand = "\
+                    cropregion %s  \
+                    --test_size %s  \
+                    --greediness %s  \
+                    --margin %s  \
+                    --init_size %s  \
+                    --init_center_X %s  \
+                    --init_center_Y %s  \
+                    --inc_ratio %s" % \
+                    (self.imagelist[CurImg],
+                        self.w("edtTestSize").get_text(), 
+                        self.w("edtGreediness").get_text(), 
+                        self.w("edtMargin").get_text(), 
+                        self.w("edtInitSize").get_text(), 
+                        self.w("edtInitCenterX").get_text(), 
+                        self.w("edtInitCenterY").get_text(), 
+                        self.w("edtIncRatio").get_text() )
+
+                CropRegionOutput = commands.getoutput(CropRegionCommand)
+                print CropRegionOutput
+                width, rest = CropRegionOutput.split("x")
+                height, left, top  = rest.split("+")
+                width = float(width); height = float(height); top = float(top); left = float(left )
+
+                self.RightCrop[CurImg] = left + width
+                self.BottomCrop[CurImg] = top + height
+                self.LeftCrop[CurImg] = left
+                self.TopCrop[CurImg] = top
+                #while CurImg <  len(self.imagelist): 
+                    #and \
+                    #(self.LeftCrop[CurImg] ==  self.LeftCrop[self.ShownImg]) and \
+                    #(self.RightCrop[CurImg] ==  self.RightCrop[self.ShownImg]) and \
+                    #(self.TopCrop[CurImg] ==  self.TopCrop[self.ShownImg]) and \
+                    #(self.BottomCrop[CurImg] ==  self.BottomCrop[self.ShownImg])):
+                    #print "CurImg" + `CurImg`
+                    #print "self.imagelist[CurImg] = " + self.imagelist[CurImg]
+                    #print(`self.LeftCrop[CurImg]`     + ", " + `self.LeftCrop[self.ShownImg]`)
+                    #print(`self.RightCrop[CurImg]`  + ", " + `self.RightCrop[self.ShownImg]`)
+                    #print(`self.TopCrop[CurImg]`     + ", " + `self.TopCrop[self.ShownImg]`)
+                    #print(`self.BottomCrop[CurImg]` + ", " + `self.BottomCrop[self.ShownImg]`)
+
+                    #commands.getoutput("./")
+
+                self.redrawArea(None, None)
+                    #CurImg = CurImg + 1     # Proceed to next image, if not the last#}}}
+    def img_rectangle_clicked(self, widget, event):#{{{
+        newX = int(event.x / self.pixbuf.get_width() * self.origpixbuf.get_width())
+        newY = int(event.y / self.pixbuf.get_height() * self.origpixbuf.get_height())
+        if self.w('chkAutoCrop').get_active(): # change all following images while they have the same rectangle
+            CurImg = self.ShownImg + 1
+            #for CurImg in range(self.ShownImg, len(self.imagelist)):
+            while CurImg < len(self.imagelist): 
+                #and \
+                #(self.LeftCrop[CurImg] ==  self.LeftCrop[self.ShownImg]) and \
+                #(self.RightCrop[CurImg] ==  self.RightCrop[self.ShownImg]) and \
+                #(self.TopCrop[CurImg] ==  self.TopCrop[self.ShownImg]) and \
+                #(self.BottomCrop[CurImg] ==  self.BottomCrop[self.ShownImg])):
+                #print "CurImg" + `CurImg`
+                #print "self.imagelist[CurImg] = " + self.imagelist[CurImg]
+                #print(`self.LeftCrop[CurImg]`     + ", " + `self.LeftCrop[self.ShownImg]`)
+                #print(`self.RightCrop[CurImg]`  + ", " + `self.RightCrop[self.ShownImg]`)
+                #print(`self.TopCrop[CurImg]`     + ", " + `self.TopCrop[self.ShownImg]`)
+                #print(`self.BottomCrop[CurImg]` + ", " + `self.BottomCrop[self.ShownImg]`)
+                if event.button == 1:        # change top left corner    
+                    if newX < self.RightCrop[CurImg]: self.LeftCrop[CurImg] = newX
+                    if newY < self.BottomCrop[CurImg]: self.TopCrop[CurImg] = newY
+                if event.button == 3:        # change bottom right corner
+                    if newX > self.LeftCrop[CurImg]: self.RightCrop[CurImg] = newX
+                    if newY > self.TopCrop[CurImg]: self.BottomCrop[CurImg] = newY
+                CurImg = CurImg + 1     # Proceed to next image, if not the last
+
+        ## Change the crop region of current image 
+        if event.button == 1:        # left mouse button - top left corner    
+            if newX < self.RightCrop[self.ShownImg]: self.LeftCrop[self.ShownImg] = newX; self.w('lblLeft').set_text(`newX`)
+            if newY < self.BottomCrop[self.ShownImg]: self.TopCrop[self.ShownImg] = newY; self.w('lblTop').set_text(`newY`)
+        if event.button == 2:        # mouse wheel - remember where the drag-drop motion started 
+            self.origX = newX
+            self.origY = newY
+            self.OldLeftCrop      =    self.LeftCrop[self.ShownImg]
+            self.OldRightCrop     =    self.RightCrop[self.ShownImg]
+            self.OldTopCrop       =    self.TopCrop[self.ShownImg]
+            self.OldBottomCrop    =    self.BottomCrop[self.ShownImg]
+        if event.button == 3:        # right mouse button - bottom right corner
+            if newX > self.LeftCrop[self.ShownImg]: self.RightCrop[self.ShownImg] = newX; self.w('lblRight').set_text(`newX`)
+            if newY > self.TopCrop[self.ShownImg]: self.BottomCrop[self.ShownImg] = newY; self.w('lblBottom').set_text(`newY`)
+        self.redrawArea(None, None)
+    #}}}
+    def on_drawingarea1_motion_notify_event(self, widget, event):#{{{
+        if event.window.get_pointer()[2] & gtk.gdk.BUTTON2_MASK:
+            newX = int(event.x / self.pixbuf.get_width() * self.origpixbuf.get_width())
+            newY = int(event.y / self.pixbuf.get_height() * self.origpixbuf.get_height())
+            if self.w('chkAutoCrop').get_active(): # change all following images while they have the same rectangle
+                CurImg = self.ShownImg + 1
+                while CurImg < len(self.imagelist): 
+                    self.LeftCrop[CurImg]     = self.OldLeftCrop   - self.origX + newX
+                    self.RightCrop[CurImg]     = self.OldRightCrop  - self.origX + newX
+                    self.TopCrop[CurImg]     = self.OldTopCrop    - self.origY + newY
+                    self.BottomCrop[CurImg]    = self.OldBottomCrop - self.origY + newY
+                    CurImg = CurImg + 1     # Proceed to next image, if not the last
+            self.LeftCrop[self.ShownImg]     = self.OldLeftCrop   - self.origX + newX
+            self.RightCrop[self.ShownImg]     = self.OldRightCrop  - self.origX + newX
+            self.TopCrop[self.ShownImg]     = self.OldTopCrop    - self.origY + newY
+            self.BottomCrop[self.ShownImg]     = self.OldBottomCrop - self.origY + newY
+            self.w('lblLeft').set_text(`newX`)
+            self.w('lblTop').set_text(`newY`)
+            self.w('lblRight').set_text(`newX`)
+            self.w('lblBottom').set_text(`newY`)
+            self.redrawArea(None, None)
+        #}}}
+    #def event_process(self, widget, data=None):#{{{ FIXME
+        #print self.w('edtRotAngle').get_text()
+        #subprocess.call("ls -l", shell=True)
+        #gc = self.w('drawingarea1').get_style().fg_gc[gtk.STATE_NORMAL]
+        #self.process_images()#}}}
+    def on_drawingarea1_drag_end(self,widget,c):
+            print 'on_drawingarea1_drag_end', c
+    def output_filename(self, orig_name, number, NoText=False):        # returns the filename with path, without extension#{{{
+        if self.w('chkPageNumbering').get_active(): 
+            # str(int(x) + 1).zfill(len(x))
+            decrementable_chars = map(chr, range(98,123)+range(66,91))
+            prefix = self.w('edtPagePrefix').get_text()
+            number = int(self.w('edtInitPage').get_text())+(int(self.w('edtPageStep').get_text())*number)
+            p2 = prefix
+            if number < 0 and len(prefix)!=0:
+                for i in range(len(prefix)-1, -1, -1):
+                    if prefix[i] in decrementable_chars:
+                        print i, prefix[0:i], prefix[i], prefix[i+1:]
+                        p2=prefix[0:i]+chr(ord(prefix[i])-1)+prefix[i+1:]
+                        number = 1000+number
+                        break
+            if NoText:
+                return str(number).zfill(3)
+            else:
+                return(self.w('dlgDirectory').get_filename() + "/" + p2 + str(number).zfill(3)) 
+        else:      
+            (filenamewoext, fileext) = orig_name.rsplit('.', 1)
+            #orig_name.strip()
+            return(filenamewoext)#}}}
+
+    def errorDialog(self, labelText, parent):#{{{
+        dialog = gtk.Dialog("Error", parent,
+                            gtk.DIALOG_NO_SEPARATOR | gtk.DIALOG_MODAL,
+                            (gtk.STOCK_OK, gtk.RESPONSE_OK))
+        label = gtk.Label(labelText)
+        dialog.vbox.pack_start(label, True, True, 0)
+        label.show()
+        dialog.run()
+        dialog.destroy()
+    #enddef#}}}
+    def destroy(self, widget, data=None):    # exit when main window closed#{{{
+        try:
+            self.cPickle = __import__('cPickle')
+            self.SettingsFileName = 'SavedCropRegions.pickle'        
+            SettingsFile = open(self.SettingsFileName, 'w')        
+            self.cPickle.dump((self.imagelist, self.LeftCrop, self.RightCrop, self.TopCrop, self.BottomCrop), SettingsFile)
+            SettingsFile.close() 
+            print "Info: Quitting. The crop settings were saved to " + self.SettingsFileName + " in the order:"
+            print "\t[imagelist, LeftCrop, RightCrop, TopCrop, BottomCrop], all of these are lists"
+        except:
+            print "Error occured saving the crop settings, quitting anyway."
+        gtk.main_quit()
+    def main(self):                
+        gtk.main()#}}}
+
+def runBash(cmd):#{{{
+    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+    out = p.stdout.read().strip()
+    return out#}}}
+#def multiplecat(self):
+    #def set_select_multiple(select_multiple)
+
+if __name__ == "__main__": 
+    try:
+        MainInstance = Main()
+        MainInstance.w("Window1").show_all()
+        gtk.main()
+    except:
+        traceback.print_exc()
+        print >>sys.stderr
+        print >>sys.stderr, "Press Enter to exit."
+        blah = raw_input()    # enables to read the error report on volatile terminal
