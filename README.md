@@ -21,6 +21,8 @@ Use the "remove background" option for sharp text and WB drawings. Use "normaliz
 
 Do not forget to make the pages rotate properly ("90 deg" = clockwise, "-90" = CCW)
 
+![Screenshot of operation](./jpg2book.png)
+
 == Files ==
  jpg2book -- the executable python program
  cropregion -- custom module that automatically determines the crop region (experimental)
