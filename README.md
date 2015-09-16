@@ -23,6 +23,8 @@ Do not forget to make the pages rotate properly ("90 deg" = clockwise, "-90" = C
 
 ![Screenshot of operation](./jpg2book.png)
 
+![Output of one page](./output.png)
+
 ## Essential files 
  * `jpg2book' -- the executable python program
  * `cropregion' -- custom module that automatically determines the crop region (experimental)
