@@ -2,13 +2,13 @@ Jpg2book -- easily crop many photographed pages, convert them and number them co
 
 ## Requirements
 some modern linux distro (not tested under Windows)
-python
+python, pygtk
 imagemagick
 
 optionally:
-	`whiteboard' (Fred scripts http://www.fmwconcepts.com/imagemagick/whiteboard/) for the "remove background" option, put into ~/bin/whiteboard
-	`tesseract OCR' for the "text output" option
-	`cuneiform OCR' for batch_ocr.sh
+ * 'whiteboard' (Fred scripts http://www.fmwconcepts.com/imagemagick/whiteboard/) for the "remove background" option, put into ~/bin/whiteboard
+ * 'tesseract' OCR for the "text output" option
+ * 'cuneiform' OCR for 'batch_ocr.sh'
 
 Tested on Ubuntu 10.10 and 15.04.
 
@@ -21,18 +21,19 @@ Use the "remove background" option for sharp text and WB drawings. Use "normaliz
 
 Do not forget to make the pages rotate properly ("90 deg" = clockwise, "-90" = CCW)
 
-![Screenshot of operation](./jpg2book.png)
-
-![Output of one page](./output.jpg)
-
 ## Essential files 
- * `jpg2book' -- the executable python program
- * `cropregion' -- custom module that automatically determines the crop region (experimental)
- * `simplex.py' -- optimisation module for automatic cropping
- * `jpg2book.xml' -- glade 2.0 XML containing the GUI
- * `batch_ocr.sh' -- optional bash script that uses cuneiform OCR to produce one HTML document from multiple pages 
+ * 'jpg2book' -- the executable python program
+ * 'cropregion' -- custom module that automatically determines the crop region (experimental)
+ * 'simplex.py' -- optimisation module for automatic cropping
+ * 'jpg2book.xml' -- glade 2.0 XML containing the GUI
+ * 'batch_ocr.sh' -- optional bash script that uses cuneiform OCR to produce one HTML document from multiple pages 
 
 ## License
 Released under GPL 2.0
 
+## Example of a screenshot and the output
+
+![Screenshot of operation](./jpg2book.png)
+
+![Output of one page](./output.jpg)
 
